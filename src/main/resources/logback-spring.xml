@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true" scanPeriod="60 seconds">
+
+    <!-- 项目名 -->
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="spring-app"/>
+    <!-- 启动时固化一次日期，用于文件名：yyyy-MM-dd -->
+    <timestamp key="byDay" datePattern="yyyy-MM-dd"/>
+
+    <!-- 控制台输出 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 文件输出：文件名 = ../log/${appName}-${byDay}.log -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>../log/${appName}-${byDay}.log</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+
+        <!-- 按天+大小滚动，最多保留 30 天，每天最多 10 个分片，每片 50MB -->
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- 归档文件名：../log/${appName}-%d{yyyy-MM-dd}.%i.log.gz -->
+            <fileNamePattern>../log/${appName}-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+            <maxFileSize>50MB</maxFileSize>
+            <!-- 与当前 file 同目录，按天切换并分片 -->
+        </rollingPolicy>
+    </appender>
+
+    <!-- 级别配置，可按需定制 -->
+    <logger name="org.springframework.web" level="INFO"/>
+    <logger name="com.springai" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+    <!-- 确保 log 目录存在（Some environments may create dynamically）-->
+    <contextListener class="ch.qos.logback.classic.jul.LevelChangePropagator">
+        <resetJUL>true</resetJUL>
+    </contextListener>
+
+</configuration>
+
+

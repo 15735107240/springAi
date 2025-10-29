@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="Maven: org.springframework.retry:spring-retry:2.0.5">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/../../worksoftware/apache-maven-3.8.2/repository/org/springframework/retry/spring-retry/2.0.5/spring-retry-2.0.5.jar!/" />
+    </CLASSES>
+    <JAVADOC>
+      <root url="jar://$PROJECT_DIR$/../../worksoftware/apache-maven-3.8.2/repository/org/springframework/retry/spring-retry/2.0.5/spring-retry-2.0.5-javadoc.jar!/" />
+    </JAVADOC>
+    <SOURCES>
+      <root url="jar://$PROJECT_DIR$/../../worksoftware/apache-maven-3.8.2/repository/org/springframework/retry/spring-retry/2.0.5/spring-retry-2.0.5-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>

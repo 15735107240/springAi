@@ -1,0 +1,36 @@
+server:
+  port: 10010
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: spring-ai
+  profiles:
+    active: dev
+  main:
+    allow-bean-definition-overriding: true
+  ai:
+    dashscope:
+      api-key: sk-b03641880ff44e9eb72006e90015ffd9
+  amap:
+    api-key: 629ec7d79c04b89d6debf8adf3ffdd2a
+# 日志配置
+logging:
+  level:
+    com.springai: INFO
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    path: ../log
+
+# 管理端点配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
