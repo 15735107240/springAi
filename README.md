@@ -3,16 +3,27 @@
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://www.oracle.com/java/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Redis](https://img.shields.io/badge/Redis-5.0+-red.svg)](https://redis.io/)
 
 基于 Spring AI 和阿里云通义千问的智能聊天助手，集成高德地图 MCP 服务，支持对话记忆、知识库检索、工具调用等功能。
+
+> 🚀 **[快速测试指南](./快速测试指南.md)** | 📋 **[更新日志](./CHANGELOG.md)**
 
 ## ✨ 核心特性
 
 ### 🤖 智能对话
-- **上下文记忆**: 基于会话 ID 的对话历史管理
+- **分布式会话记忆**: 基于 Redis 的持久化对话历史，支持分布式部署 ⭐NEW
+- **多轮对话**: 完整的上下文记忆，自动提取实体和参数
 - **知识库检索**: 集成 DashScope RAG，支持内部知识问答
 - **流式响应**: 实时流式输出，提升用户体验
 - **智能决策**: 根据对话上下文自动选择工具/知识库/大模型
+
+### 💾 会话管理
+- **持久化存储**: 基于 Redisson 的 Redis 存储，服务重启数据不丢失 ⭐NEW
+- **自动过期**: 可配置的会话过期时间（默认7天）
+- **分页查询**: 支持按页查询历史消息，适用于移动端和Web端 ⭐NEW
+- **批量操作**: 支持批量查询、清除、刷新会话
+- **多用户隔离**: 完全隔离的用户会话数据
 
 ### 🗺️ 高德地图集成
 - **地理编码**: 地址 ⇄ 坐标转换，支持多结果返回
@@ -36,8 +47,10 @@
 
 ### 技术栈
 - **框架**: Spring Boot 3.2.5
-- **AI 引擎**: Spring AI Alibaba 1.0.0.3
+- **AI 引擎**: Spring AI Alibaba 1.0.0-M5.1
 - **大模型**: 阿里云通义千问 (DashScope)
+- **缓存/存储**: Redis + Redisson 3.27.2 ⭐NEW
+- **序列化**: Kryo5 高性能二进制序列化 ⭐NEW
 - **地图服务**: 高德地图 API
 - **模板引擎**: Thymeleaf
 - **构建工具**: Maven
@@ -49,21 +62,28 @@ springAI/
 │   ├── HelloApplication.java          # 启动类
 │   ├── controller/
 │   │   ├── SpringAiController.java    # 主控制器
-│   │   └── AmapTestController.java    # 高德地图测试控制器
+│   │   ├── AmapTestController.java    # 高德地图测试控制器
+│   │   └── ChatHistoryController.java # 会话历史管理 ⭐NEW
 │   ├── service/
 │   │   ├── SpringAiService.java       # 服务接口
+│   │   ├── ChatHistoryService.java    # 会话历史服务 ⭐NEW
 │   │   └── impl/
-│   │       └── SpringAiServiceImpl.java # 服务实现
+│   │       ├── SpringAiServiceImpl.java     # 服务实现
+│   │       └── ChatHistoryServiceImpl.java  # 会话历史实现 ⭐NEW
+│   ├── memory/
+│   │   └── RedissonChatMemory.java    # Redis会话存储 ⭐NEW
+│   ├── exception/
+│   │   └── ChatMemoryException.java   # 会话异常 ⭐NEW
 │   ├── tools/
 │   │   ├── AmapMapsService.java       # 高德地图工具
 │   │   ├── MockWeatherService.java    # 天气服务
 │   │   ├── MockOrderService.java      # 订单服务
-│   │   ├── MockLiveService.java       # 租房服务
-│   │   └── TimeTools.java             # 时间工具
+│   │   └── MockLiveService.java       # 租房服务
 │   └── config/
-│       └── Config.java                # 工具函数配置
+│       ├── Config.java                # 工具函数配置
+│       └── RedissonConfig.java        # Redisson配置 ⭐NEW
 ├── src/main/resources/
-│   ├── application.yml                # 应用配置
+│   ├── application.yml                # 应用配置（含Redis）
 │   └── logback-spring.xml            # 日志配置
 └── pom.xml                           # Maven 配置
 ```
@@ -73,6 +93,7 @@ springAI/
 ### 环境要求
 - JDK 17+
 - Maven 3.6+
+- Redis 5.0+ ⭐NEW
 - 阿里云 DashScope API Key
 - 高德地图 API Key
 
@@ -84,7 +105,20 @@ git clone <repository-url>
 cd springAI
 ```
 
-#### 2. 配置 API Keys
+#### 2. 启动 Redis
+```bash
+# macOS (使用 Homebrew)
+brew services start redis
+
+# 或直接运行
+redis-server
+
+# 验证 Redis 是否运行
+redis-cli ping
+# 应该返回: PONG
+```
+
+#### 3. 配置 API Keys
 编辑 `src/main/resources/application.yml`:
 
 ```yaml
@@ -94,13 +128,25 @@ spring:
       api-key: your_dashscope_api_key  # 阿里云通义千问 API Key
   amap:
     api-key: your_amap_api_key         # 高德地图 API Key
+  data:
+    redis:
+      host: localhost                  # Redis 地址
+      port: 6379                       # Redis 端口
+      password:                        # Redis 密码（如有）
+
+chat:
+  memory:
+    redis:
+      ttl: 604800                      # 会话过期时间（秒），默认7天
+  admin:
+    key: admin                         # 管理员密钥（生产环境请修改）
 ```
 
 **获取 API Keys**:
 - 阿里云 DashScope: [https://dashscope.console.aliyun.com/](https://dashscope.console.aliyun.com/)
 - 高德地图: [https://lbs.amap.com/](https://lbs.amap.com/)
 
-#### 3. 启动应用
+#### 4. 启动应用
 ```bash
 # 使用 Maven
 mvn spring-boot:run
@@ -148,6 +194,95 @@ GET /api/simple/image?query=一只可爱的猫咪
 ```
 
 **响应**: 重定向到生成的图像 URL
+
+### 会话历史管理 ⭐NEW
+
+#### 1. 查询会话历史
+```bash
+# 查询最近10条消息
+curl "http://localhost:10010/api/history/user123?lastN=10"
+
+# 查询所有消息
+curl "http://localhost:10010/api/history/user123"
+```
+
+#### 2. 分页查询历史
+```bash
+# 第一页（默认每页10条）
+curl "http://localhost:10010/api/history/user123/page"
+
+# 第二页，每页20条
+curl "http://localhost:10010/api/history/user123/page?page=2&size=20"
+```
+
+**响应示例**:
+```json
+{
+  "conversationId": "user123",
+  "page": 1,
+  "size": 10,
+  "totalMessages": 45,
+  "totalPages": 5,
+  "hasNext": true,
+  "hasPrevious": false,
+  "messages": [...]
+}
+```
+
+#### 3. 查询会话信息
+```bash
+curl "http://localhost:10010/api/history/user123/info"
+```
+
+#### 4. 清除会话历史
+```bash
+curl -X DELETE "http://localhost:10010/api/history/user123"
+```
+
+#### 5. 刷新会话过期时间
+```bash
+curl -X POST "http://localhost:10010/api/history/user123/refresh"
+```
+
+#### 6. 批量检查会话
+```bash
+curl -X POST "http://localhost:10010/api/history/batch/check" \
+  -H "Content-Type: application/json" \
+  -d '["user123", "user456"]'
+```
+
+#### 7. 管理员：查询所有会话 🔐
+```bash
+# 需要管理员密钥
+curl "http://localhost:10010/api/history/admin/conversations?adminKey=admin"
+```
+
+**响应示例**:
+```json
+{
+  "total": 3,
+  "conversationIds": ["user123", "user456", "user789"],
+  "conversations": [
+    {
+      "conversationId": "user123",
+      "messageCount": 45,
+      "remainingTtl": 604800
+    },
+    {
+      "conversationId": "user456",
+      "messageCount": 20,
+      "remainingTtl": 500000
+    },
+    {
+      "conversationId": "user789",
+      "messageCount": 10,
+      "remainingTtl": 600000
+    }
+  ]
+}
+```
+
+> ⚠️ **安全提示**: 这是管理员接口，需要提供正确的 `adminKey` 才能访问
 
 ### 高德地图工具测试接口
 
@@ -293,6 +428,82 @@ curl http://localhost:10010/actuator/metrics
 - [阿里云通义千问](https://dashscope.aliyun.com/) - 大语言模型服务
 - [高德地图开放平台](https://lbs.amap.com/) - 地图服务提供商
 
+## 📚 扩展阅读
+
+- **[快速测试指南](./快速测试指南.md)** - 完整的测试场景和故障排查
+- **[CHANGELOG](./CHANGELOG.md)** - 版本更新日志
+
+## 🔧 高级配置
+
+### Redisson 配置详解
+
+```yaml
+redisson:
+  single-server-config:
+    address: redis://localhost:6379
+    password:                         # Redis密码
+    database: 0                       # 数据库索引
+    connection-pool-size: 64          # 连接池大小
+    connection-minimum-idle-size: 10  # 最小空闲连接
+    idle-connection-timeout: 10000    # 空闲连接超时
+    timeout: 3000                     # 操作超时时间
+  threads: 16                         # 线程池大小
+  netty-threads: 32                   # Netty线程池大小
+
+chat:
+  admin:
+    key: your_secure_admin_key        # ⚠️ 生产环境务必修改此密钥
+```
+
+> ⚠️ **安全建议**：生产环境中务必修改默认的管理员密钥，建议使用随机生成的复杂字符串
+
+### 会话存储机制
+
+- **序列化方式**: Kryo5（高性能二进制序列化）
+- **存储结构**: Redis List
+- **键格式**: `chat:memory:{conversationId}`
+- **自动过期**: 默认7天（604800秒）
+
+### 分页查询最佳实践
+
+**页码说明**：页码从 **1** 开始（第1页、第2页、第3页...）
+
+```javascript
+// 前端示例：滚动加载
+async function loadMoreMessages(page = 1, size = 20) {
+  const response = await fetch(
+    `/api/history/${conversationId}/page?page=${page}&size=${size}`
+  );
+  const data = await response.json();
+  return {
+    messages: data.messages,
+    hasMore: data.hasNext,
+    currentPage: data.page,
+    totalPages: data.totalPages
+  };
+}
+
+// 使用示例
+loadMoreMessages(1);  // 第1页
+loadMoreMessages(2);  // 第2页
+```
+
+### 常见问题排查
+
+#### 问题1: Redis连接失败
+```bash
+# 检查Redis是否运行
+redis-cli ping
+
+# 清除旧数据（序列化格式不兼容时）
+redis-cli DEL chat:memory:{conversationId}
+```
+
+#### 问题2: 会话数据丢失
+- 检查TTL配置是否过短
+- 验证Redis持久化是否开启
+- 确认Redis内存淘汰策略
+
 ## 📮 联系方式
 
 如有问题或建议，欢迎通过以下方式联系：
@@ -302,4 +513,6 @@ curl http://localhost:10010/actuator/metrics
 ---
 
 ⭐ 如果这个项目对你有帮助，请给一个 Star！
+
+**最后更新**: 2025-10-30 | **版本**: v1.0.2
 

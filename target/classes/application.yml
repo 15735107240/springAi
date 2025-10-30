@@ -15,6 +15,46 @@ spring:
       api-key: sk-b03641880ff44e9eb72006e90015ffd9
   amap:
     api-key: 629ec7d79c04b89d6debf8adf3ffdd2a
+  # Redis配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: 
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-wait: -1ms
+          max-idle: 8
+          min-idle: 0
+
+# Redisson配置
+redisson:
+  # 单节点模式
+  single-server-config:
+    address: redis://localhost:6379
+    password: 
+    database: 0
+    connection-pool-size: 64
+    connection-minimum-idle-size: 10
+    idle-connection-timeout: 10000
+    timeout: 3000
+  # 线程池配置
+  threads: 16
+  netty-threads: 32
+
+# Chat Memory配置
+chat:
+  memory:
+    redis:
+      key-prefix: "chat:memory:"
+      # 会话过期时间（秒），默认7天
+      ttl: 604800
+  admin:
+    # 管理员密钥（生产环境请修改）
+    key: admin
 # 日志配置
 logging:
   level:

@@ -15,7 +15,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.AbstractChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemory;
 import org.springframework.ai.image.ImageModel;
 import org.springframework.ai.image.ImageOptions;
 import org.springframework.ai.image.ImageOptionsBuilder;
@@ -31,9 +30,11 @@ public class SpringAiServiceImpl implements SpringAiService {
 
     private final ImageModel imageModel;
 
-    private ChatMemory chatMemory = new InMemoryChatMemory();
+    private final ChatMemory chatMemory;
 
-    public SpringAiServiceImpl(ChatClient.Builder builder, ImageModel imageModel, DashScopeApi dashscopeApi) {
+    public SpringAiServiceImpl(ChatClient.Builder builder, ImageModel imageModel, 
+                               DashScopeApi dashscopeApi, ChatMemory chatMemory) {
+        this.chatMemory = chatMemory;
         DocumentRetriever retriever = new DashScopeDocumentRetriever(dashscopeApi,
                 DashScopeDocumentRetrieverOptions.builder().withIndexName("闫文杰的个人信息").build());
         String systemPrompt = """
