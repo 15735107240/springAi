@@ -80,7 +80,7 @@ public class SpringAiServiceImpl implements SpringAiService {
                 今天的日期是 {current_date}。
                 """;
         this.chatClient = builder.defaultSystem(systemPrompt)
-                .defaultFunctions("weatherFunction1", "getOrderFunction", "getLiveRoomFunction", 
+                .defaultFunctions("weatherFunction1", "getOrderFunction", "getLiveRoomFunction",
                     "geoFunction", "regeoFunction", "directionFunction", "aroundSearchFunction", "amapWeatherFunction")
                 .defaultAdvisors(new MessageChatMemoryAdvisor(chatMemory), new DocumentRetrievalAdvisor(retriever))
                 .build();
@@ -108,7 +108,6 @@ public class SpringAiServiceImpl implements SpringAiService {
 
         ImagePrompt imagePrompt = new ImagePrompt(query, options);
         ImageResponse imageResponse = imageModel.call(imagePrompt);
-        String imageUrl = imageResponse.getResult().getOutput().getUrl();
-        return "redirect:" + imageUrl;
+        return imageResponse.getResult().getOutput().getUrl();
     }
 }
