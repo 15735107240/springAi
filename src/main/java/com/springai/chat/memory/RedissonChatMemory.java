@@ -75,15 +75,19 @@ public class RedissonChatMemory implements ChatMemory {
                 return new ArrayList<>();
             }
             
-            // 获取最后N条消息
+            // 获取最后N条消息（最新的）
             int fromIndex = Math.max(0, size - lastN);
             List<Message> messages = new ArrayList<>(messageList.range(fromIndex, size - 1));
+            
+            // 反转顺序，使最新的消息在前
+            List<Message> reversedMessages = new ArrayList<>(messages);
+            java.util.Collections.reverse(reversedMessages);
             
             // 刷新过期时间
             messageList.expire(Duration.ofSeconds(ttlSeconds));
             
-            log.debug("Retrieved {} messages (last {}) from conversation: {}", messages.size(), lastN, conversationId);
-            return messages;
+            log.debug("Retrieved {} messages (last {}) from conversation: {}", reversedMessages.size(), lastN, conversationId);
+            return reversedMessages;
         } catch (Exception e) {
             log.error("Failed to get messages from conversation: {}", conversationId, e);
             return new ArrayList<>();
@@ -175,11 +179,15 @@ public class RedissonChatMemory implements ChatMemory {
             
             List<Message> messages = new ArrayList<>(messageList.readAll());
             
+            // 反转顺序，使最新的消息在前
+            List<Message> reversedMessages = new ArrayList<>(messages);
+            java.util.Collections.reverse(reversedMessages);
+            
             // 刷新过期时间
             messageList.expire(Duration.ofSeconds(ttlSeconds));
             
-            log.debug("Retrieved all {} messages from conversation: {}", messages.size(), conversationId);
-            return messages;
+            log.debug("Retrieved all {} messages from conversation: {}", reversedMessages.size(), conversationId);
+            return reversedMessages;
         } catch (Exception e) {
             log.error("Failed to get all messages from conversation: {}", conversationId, e);
             return new ArrayList<>();
@@ -187,11 +195,11 @@ public class RedissonChatMemory implements ChatMemory {
     }
 
     /**
-     * 分页获取消息
+     * 分页获取消息（按时间倒序，最新的在前）
      * @param conversationId 会话ID
-     * @param page 页码（从0开始）
+     * @param page 页码（从0开始，0表示最新的一页）
      * @param size 每页大小
-     * @return 当前页的消息列表
+     * @return 当前页的消息列表（最新的在前）
      */
     public List<Message> getMessagesByPage(String conversationId, int page, int size) {
         try {
@@ -208,24 +216,59 @@ public class RedissonChatMemory implements ChatMemory {
                 return new ArrayList<>();
             }
             
-            // 计算起始和结束索引
-            int fromIndex = page * size;
-            int toIndex = Math.min(fromIndex + size, totalSize) - 1;
+            // 按倒序计算索引（最新的消息在列表末尾）
+            // 第0页：从末尾开始，获取最后size条（最新的）
+            // 第1页：从倒数第size+1条开始，获取前size条（较旧的）
+            // 计算应该获取的结束索引（从后往前）
+            int toIndex = totalSize - page * size - 1;
+            int fromIndex = totalSize - (page + 1) * size;
             
-            // 如果起始索引超出范围，返回空列表
-            if (fromIndex >= totalSize) {
-                log.debug("Page {} is out of range for conversation: {}", page, conversationId);
+            // 如果toIndex小于0，说明这个页码已经完全超出范围
+            if (toIndex < 0) {
+                log.debug("Page {} is completely out of range for conversation: {} (totalSize: {}, size: {})", 
+                        page, conversationId, totalSize, size);
                 return new ArrayList<>();
             }
             
+            // 如果fromIndex小于0，说明数据不足，从索引0开始
+            if (fromIndex < 0) {
+                fromIndex = 0;
+                log.debug("Page {} requesting more data than available, adjusting fromIndex to 0 (totalSize: {}, size: {})", 
+                        page, conversationId, totalSize, size);
+            }
+            
+            // 如果起始索引超出总数，返回空列表
+            if (fromIndex >= totalSize) {
+                log.debug("Page {} is out of range for conversation: {} (totalSize: {})", 
+                        page, conversationId, totalSize);
+                return new ArrayList<>();
+            }
+            
+            // 确保toIndex不超过列表范围
+            if (toIndex >= totalSize) {
+                toIndex = totalSize - 1;
+            }
+            
+            // 确保fromIndex <= toIndex
+            if (fromIndex > toIndex) {
+                log.debug("Invalid range for page {} in conversation: {} (fromIndex: {}, toIndex: {})", 
+                        page, conversationId, fromIndex, toIndex);
+                return new ArrayList<>();
+            }
+            
+            // 从Redis获取消息（从旧到新）
             List<Message> messages = new ArrayList<>(messageList.range(fromIndex, toIndex));
+            
+            // 反转顺序，使最新的消息在前
+            List<Message> reversedMessages = new ArrayList<>(messages);
+            java.util.Collections.reverse(reversedMessages);
             
             // 刷新过期时间
             messageList.expire(Duration.ofSeconds(ttlSeconds));
             
-            log.debug("Retrieved {} messages (page {}, size {}) from conversation: {}", 
-                    messages.size(), page, size, conversationId);
-            return messages;
+            log.debug("Retrieved {} messages (page {}, size {}) from conversation: {} (reverse order)", 
+                    reversedMessages.size(), page, size, conversationId);
+            return reversedMessages;
         } catch (Exception e) {
             log.error("Failed to get messages by page from conversation: {}", conversationId, e);
             return new ArrayList<>();

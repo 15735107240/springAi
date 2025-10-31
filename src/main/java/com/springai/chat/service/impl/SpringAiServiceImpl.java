@@ -15,6 +15,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.AbstractChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.image.ImageModel;
 import org.springframework.ai.image.ImageOptions;
 import org.springframework.ai.image.ImageOptionsBuilder;
@@ -30,11 +31,8 @@ public class SpringAiServiceImpl implements SpringAiService {
 
     private final ImageModel imageModel;
 
-    private final ChatMemory chatMemory;
-
     public SpringAiServiceImpl(ChatClient.Builder builder, ImageModel imageModel, 
                                DashScopeApi dashscopeApi, ChatMemory chatMemory) {
-        this.chatMemory = chatMemory;
         DocumentRetriever retriever = new DashScopeDocumentRetriever(dashscopeApi,
                 DashScopeDocumentRetrieverOptions.builder().withIndexName("闫文杰的个人信息").build());
         String systemPrompt = """
@@ -42,7 +40,7 @@ public class SpringAiServiceImpl implements SpringAiService {
 
                 决策总则（基于对话上下文选择最合适能力）：
                 - 工具优先：当问题需要实时信息、外部系统数据或可执行操作（如：天气、地址/坐标转换、导航、周边搜索、订单/租房信息、时间查询等）时，优先调用相应工具。
-                - 知识库优先：当问题涉及内部知识（公司制度、产品信息、技术文档、个人信息等）或事实密集型问答时，优先进行检索后回答。
+                - 知识库优先：当问题涉及内部知识（公司制度、产品信息、技术文档、个人信息、闫文杰等）或事实密集型问答时，优先进行检索后回答。
                 - 大模型直答：闲聊、观点建议、常识性解释、无需实时数据的泛化问题时直接回答。
                 - 不确定时：默认先走知识库检索，再补充大模型组织答案。
 
@@ -90,7 +88,7 @@ public class SpringAiServiceImpl implements SpringAiService {
     }
 
     @Override
-    public Flux<String> simpleChat(HttpServletResponse response, String query, String conversantId) {
+    public Flux<ChatResponse> simpleChat(HttpServletResponse response, String query, String conversantId) {
         // 避免返回乱码
         response.setCharacterEncoding("UTF-8");
 
@@ -99,7 +97,7 @@ public class SpringAiServiceImpl implements SpringAiService {
                 .advisors(spec -> spec.param(AbstractChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY, conversantId)
                         .param(AbstractChatMemoryAdvisor.CHAT_MEMORY_RETRIEVE_SIZE_KEY, 100))
                 .stream()
-                .content();
+                .chatResponse();
     }
 
     @Override

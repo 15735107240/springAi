@@ -1,5 +1,6 @@
 package com.springai.chat.controller;
 
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.web.bind.annotation.*;
 
 import com.springai.chat.service.SpringAiService;
@@ -29,7 +30,7 @@ public class SpringAiController {
     }
 
     @GetMapping("/simple/chat")
-    public Flux<String> simpleChat(HttpServletResponse response, String query, String conversantId) {
+    public Flux<ChatResponse> simpleChat(HttpServletResponse response, String query, String conversantId) {
 
         return springAiService.simpleChat(response, query, conversantId);
     }
