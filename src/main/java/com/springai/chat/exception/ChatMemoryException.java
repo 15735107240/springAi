@@ -1,10 +1,9 @@
 package com.springai.chat.exception;
 
 /**
- * 聊天记忆相关异常
+ * ChatMemory 操作异常
  * 
  * @author yanwenjie
- * @create 2025-10-30
  */
 public class ChatMemoryException extends RuntimeException {
 

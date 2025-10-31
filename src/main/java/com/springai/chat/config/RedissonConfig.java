@@ -1,5 +1,6 @@
 package com.springai.chat.config;
 
+import com.springai.chat.memory.InMemoryChatMemory;
 import com.springai.chat.memory.RedissonChatMemory;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.Redisson;
@@ -16,7 +17,6 @@ import org.springframework.context.annotation.Configuration;
  * 配置RedissonClient和基于Redis的ChatMemory
  * 
  * @author yanwenjie
- * @create 2025-10-30
  */
 @Slf4j
 @Configuration
@@ -88,19 +88,31 @@ public class RedissonConfig {
         config.setThreads(threads);
         config.setNettyThreads(nettyThreads);
         
-        log.info("Redisson client configured with Kryo5 codec, address: {}, database: {}", address, database);
+        log.info("Redisson 客户端配置完成 - 编解码器: Kryo5, 地址: {}, 数据库: {}", address, database);
         
         return Redisson.create(config);
     }
 
     /**
      * 配置基于Redisson的ChatMemory
+     * 如果 RedissonClient 创建失败，将使用简单的内存实现作为后备
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnBean(RedissonClient.class)
     public ChatMemory chatMemory(RedissonClient redissonClient) {
-        log.info("Creating RedissonChatMemory with keyPrefix: {}, ttl: {} seconds", 
+        log.info("正在创建 RedissonChatMemory - 键前缀: {}, 过期时间: {} 秒", 
                 chatMemoryKeyPrefix, chatMemoryTtl);
         return new RedissonChatMemory(redissonClient, chatMemoryKeyPrefix, chatMemoryTtl);
+    }
+    
+    /**
+     * 后备内存实现（当 Redis 不可用时使用）
+     */
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean(ChatMemory.class)
+    public ChatMemory inMemoryChatMemory() {
+        log.warn("Redis 不可用，使用内存 ChatMemory（数据不会持久化）");
+        return new InMemoryChatMemory();
     }
 }
 

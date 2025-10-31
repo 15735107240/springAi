@@ -34,7 +34,7 @@ public class ChatController {
     public Flux<ChatResponse> chatStream(
             @RequestParam String query,
             @RequestParam String conversantId) {
-        log.info("Chat request received - query: {}, conversantId: {}", query, conversantId);
+        log.info("收到聊天请求 - 消息: {}, 用户标识: {}", query, conversantId);
         return chatService.chat(query, conversantId);
     }
 
@@ -48,7 +48,7 @@ public class ChatController {
     public Flux<ChatResponse> chat(
             @RequestParam String query,
             @RequestParam String conversantId) {
-        log.info("Chat request received - query: {}, conversantId: {}", query, conversantId);
+        log.info("收到聊天请求 - 消息: {}, 用户标识: {}", query, conversantId);
         return chatService.chat(query, conversantId);
     }
 
@@ -59,7 +59,7 @@ public class ChatController {
      */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ChatResponse> chatStreamPost(@RequestBody ChatRequest request) {
-        log.info("Chat POST request received - query: {}, conversantId: {}", 
+        log.info("收到 POST 聊天请求 - 消息: {}, 用户标识: {}", 
                 request.getQuery(), request.getConversantId());
         return chatService.chat(request.getQuery(), request.getConversantId());
     }

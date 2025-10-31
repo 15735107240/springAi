@@ -192,7 +192,7 @@ public class ChatHistoryController {
 
     /**
      * 获取所有会话ID列表（管理员接口）
-     * @param requestAdminKey 管理员密钥
+     * @param adminKey 管理员密钥
      * @return 所有会话ID列表
      */
     @GetMapping("/admin/conversations")

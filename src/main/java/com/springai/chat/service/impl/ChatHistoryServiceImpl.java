@@ -27,16 +27,25 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
 
     @Override
     public List<Message> getHistory(String conversationId, int lastN) {
-        log.info("Getting history for conversation: {}, lastN: {}", conversationId, lastN);
+        log.info("查询会话历史: conversationId={}, lastN={}", conversationId, lastN);
         if (lastN < 0) {
             return getAllMessages(conversationId);
         }
-        return chatMemory.get(conversationId, lastN);
+        if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
+            return redissonChatMemory.get(conversationId, lastN);
+        }
+        // 如果不是 RedissonChatMemory，使用默认方法
+        List<Message> allMessages = chatMemory.get(conversationId);
+        if (lastN > 0 && lastN < allMessages.size()) {
+            int startIndex = Math.max(0, allMessages.size() - lastN);
+            return allMessages.subList(startIndex, allMessages.size());
+        }
+        return allMessages;
     }
 
     @Override
     public void clearHistory(String conversationId) {
-        log.info("Clearing history for conversation: {}", conversationId);
+        log.info("清除会话历史: conversationId={}", conversationId);
         chatMemory.clear(conversationId);
     }
 
@@ -45,8 +54,9 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             return redissonChatMemory.getMessageCount(conversationId);
         }
-        log.warn("ChatMemory is not RedissonChatMemory, returning 0");
-        return 0;
+        log.warn("ChatMemory 不是 RedissonChatMemory，返回消息列表大小");
+        List<Message> messages = chatMemory.get(conversationId);
+        return messages != null ? messages.size() : 0;
     }
 
     @Override
@@ -54,8 +64,9 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             return redissonChatMemory.exists(conversationId);
         }
-        log.warn("ChatMemory is not RedissonChatMemory, returning false");
-        return false;
+        log.warn("ChatMemory 不是 RedissonChatMemory，检查消息列表是否为空");
+        List<Message> messages = chatMemory.get(conversationId);
+        return messages != null && !messages.isEmpty();
     }
 
     @Override
@@ -63,33 +74,33 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             return redissonChatMemory.getRemainingTtl(conversationId);
         }
-        log.warn("ChatMemory is not RedissonChatMemory, returning -1");
+        log.warn("ChatMemory 不是 RedissonChatMemory，返回 -1");
         return -1;
     }
 
     @Override
     public void refreshTtl(String conversationId) {
-        log.info("Refreshing TTL for conversation: {}", conversationId);
+        log.info("刷新会话过期时间: conversationId={}", conversationId);
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             redissonChatMemory.refreshTtl(conversationId);
         } else {
-            log.warn("ChatMemory is not RedissonChatMemory, cannot refresh TTL");
+            log.warn("ChatMemory 不是 RedissonChatMemory，无法刷新过期时间");
         }
     }
 
     @Override
     public List<Message> getAllMessages(String conversationId) {
-        log.info("Getting all messages for conversation: {}", conversationId);
+        log.info("获取所有会话消息: conversationId={}", conversationId);
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             return redissonChatMemory.getAllMessages(conversationId);
         }
-        log.warn("ChatMemory is not RedissonChatMemory, returning empty list");
-        return List.of();
+        log.warn("ChatMemory 不是 RedissonChatMemory，返回标准get方法结果");
+        return chatMemory.get(conversationId);
     }
 
     @Override
     public ChatHistoryService.PageResult getMessagesByPage(String conversationId, int page, int size) {
-        log.info("Getting messages by page for conversation: {}, page: {}, size: {}", conversationId, page, size);
+        log.info("分页查询会话消息: conversationId={}, page={}, size={}", conversationId, page, size);
         
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             int totalMessages = redissonChatMemory.getMessageCount(conversationId);
@@ -97,19 +108,19 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             return new ChatHistoryService.PageResult(messages, page, size, totalMessages);
         }
         
-        log.warn("ChatMemory is not RedissonChatMemory, returning empty page result");
+        log.warn("ChatMemory 不是 RedissonChatMemory，返回空分页结果");
         return new ChatHistoryService.PageResult(List.of(), page, size, 0);
     }
 
     @Override
     public List<String> getAllConversationIds() {
-        log.info("Getting all conversation IDs");
+        log.info("获取所有会话ID列表");
         
         if (chatMemory instanceof RedissonChatMemory redissonChatMemory) {
             return redissonChatMemory.getAllConversationIds();
         }
         
-        log.warn("ChatMemory is not RedissonChatMemory, returning empty list");
+        log.warn("ChatMemory 不是 RedissonChatMemory，返回空列表");
         return List.of();
     }
 }
