@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.rag.retrieval.search.DocumentRetriever;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -250,6 +251,7 @@ public class ChatServiceImpl implements ChatService {
         // 使用 ChatClient 而不是 ChatModel，这样可以获取所有配置（系统提示词、知识库检索、工具调用等）
         // 使用注入的工具服务实例，确保 @Value 配置能够正确注入
         Flux<ChatResponse> responseFlux = chatClient.prompt(prompt)
+                .options(ChatOptions.builder().model("qwen3-max").build())
                 .system(s -> s.param("current_date", LocalDate.now().toString()))
                 .stream()
                 .chatResponse();
