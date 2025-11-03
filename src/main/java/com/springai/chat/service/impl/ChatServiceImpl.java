@@ -23,6 +23,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -55,14 +56,14 @@ public class ChatServiceImpl implements ChatService {
                - 实时数据：天气、地址/坐标转换、导航路线、周边搜索
                - 业务操作：订单查询、租房信息查询
                - 时间相关：当前日期查询（系统已注入{current_date}）
-            
+
             2. **知识库优先**：当问题涉及内部知识或事实密集型问答时，优先进行知识库检索。
                - 关于"闫文杰"的个人信息、项目经历、工作经验、技能特长
                - 公司制度、产品信息、技术文档等内部知识
                - 系统会自动从"闫文杰的个人信息"知识库中检索相关内容
-            
+
             3. **大模型直答**：闲聊、观点建议、常识性解释、无需实时数据的泛化问题时直接回答。
-            
+
             4. **不确定时**：默认先走知识库检索，再补充大模型组织答案。
 
             ## 上下文与实体记忆
@@ -180,7 +181,7 @@ public class ChatServiceImpl implements ChatService {
         // 构建 ChatClient（用于工具调用）
         ChatClient.Builder builder = chatClientBuilder.defaultSystem(SYSTEM_PROMPT)
                 .defaultTools(amapMapsService, mockLiveService, mockOrderService);
-
+        builder.defaultOptions(ChatOptions.builder().model("qwen3-max").build());
         // 如果 DashScopeApi 存在，添加知识库检索 Advisor
         if (dashscopeApi != null) {
             try {
@@ -251,75 +252,115 @@ public class ChatServiceImpl implements ChatService {
         // 使用 ChatClient 而不是 ChatModel，这样可以获取所有配置（系统提示词、知识库检索、工具调用等）
         // 使用注入的工具服务实例，确保 @Value 配置能够正确注入
         Flux<ChatResponse> responseFlux = chatClient.prompt(prompt)
-                .options(ChatOptions.builder().model("qwen3-max").build())
                 .system(s -> s.param("current_date", LocalDate.now().toString()))
                 .stream()
                 .chatResponse();
 
-        // 4. 保存对话到 ChatMemory（在响应流完成后）
+        // 4. 异步保存对话到 ChatMemory（不阻塞流式响应）
         if (chatMemory != null && conversantId != null && !conversantId.trim().isEmpty()) {
-            final int historySize = history.size(); // 保存历史大小供 lambda 使用
+            final int historySize = history.size();
+            
+            // 先立即保存用户消息（不需要等待响应）
+            List<Message> userMessagesToSave = new ArrayList<>();
+            userMessagesToSave.add(userMessage);
+            chatMemory.add(conversantId, userMessagesToSave);
+            log.debug("已保存用户消息到对话历史，用户标识: {}", conversantId);
+
+            // 使用线程安全的 StringBuffer 收集响应内容
+            StringBuffer assistantContentBuffer = new StringBuffer();
+            
+            // 在后台异步收集和保存助手消息
             responseFlux = responseFlux
-                    .collectList()
-                    .flatMapMany(responses -> {
-                        // 保存用户消息和所有助手响应到 ChatMemory
-                        List<Message> messagesToSave = new ArrayList<>();
-                        messagesToSave.add(userMessage);
+                    // 实时收集每个响应块的文本内容（不阻塞流）
+                    .doOnNext(response -> {
+                        if (response.getResult() != null) {
+                            var result = response.getResult();
+                            String content = null;
 
-                        // 从所有响应中提取助手消息
-                        StringBuilder assistantContent = new StringBuilder();
-                        for (ChatResponse response : responses) {
-                            if (response.getResult() != null) {
-                                // 方法1: 尝试从 Result 中获取消息
-                                var result = response.getResult();
+                            // 尝试获取 Output（通常是 Generation 对象）
+                            if (result.getOutput() != null) {
+                                content = extractTextContent(result.getOutput());
+                            }
 
-                                // 尝试获取 Output（通常是 Generation 对象）
-                                if (result.getOutput() != null) {
-                                    String content = extractTextContent(result.getOutput());
-                                    if (content != null && !content.trim().isEmpty()) {
-                                        assistantContent.append(content);
-                                    }
-                                }
-
-                                // 方法2: 尝试从 Result 直接获取消息
+                            // 如果第一次尝试失败，使用反射
+                            if (content == null || content.trim().isEmpty()) {
                                 try {
                                     java.lang.reflect.Method getOutputMethod = result.getClass().getMethod("getOutput");
                                     Object output = getOutputMethod.invoke(result);
                                     if (output != null) {
-                                        String content = extractTextContent(output);
-                                        if (content != null && !content.trim().isEmpty()) {
-                                            if (assistantContent.length() > 0 &&
-                                                    !assistantContent.toString().contains(content)) {
-                                                assistantContent.append(content);
-                                            } else if (assistantContent.length() == 0) {
-                                                assistantContent.append(content);
-                                            }
-                                        }
+                                        content = extractTextContent(output);
                                     }
                                 } catch (Exception e) {
                                     // 忽略反射异常
                                 }
                             }
-                        }
 
-                        // 如果有助手回复，添加到消息列表（清理重复内容）
-                        String finalContent = assistantContent.toString().trim();
+                            // 追加到内容（去重，使用同步块保证线程安全）
+                            if (content != null && !content.trim().isEmpty()) {
+                                synchronized (assistantContentBuffer) {
+                                    String current = assistantContentBuffer.toString();
+                                    if (current.isEmpty() || !current.contains(content)) {
+                                        assistantContentBuffer.append(content);
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    // 流完成时异步保存助手消息
+                    .doOnComplete(() -> {
+                        // 切换到后台线程执行保存操作，不阻塞响应流
+                        String finalContent;
+                        synchronized (assistantContentBuffer) {
+                            finalContent = assistantContentBuffer.toString().trim();
+                        }
+                        
                         if (!finalContent.isEmpty()) {
-                            // 移除重复的 AssistantMessage 描述
-                            finalContent = cleanAssistantContent(finalContent);
-                            AssistantMessage assistantMessage = new AssistantMessage(finalContent);
-                            messagesToSave.add(assistantMessage);
+                            Flux.just(finalContent)
+                                    .publishOn(Schedulers.boundedElastic())
+                                    .subscribe(content -> {
+                                        try {
+                                            // 移除重复的 AssistantMessage 描述
+                                            content = cleanAssistantContent(content);
+                                            AssistantMessage assistantMessage = new AssistantMessage(content);
+                                            
+                                            List<Message> assistantMessagesToSave = new ArrayList<>();
+                                            assistantMessagesToSave.add(assistantMessage);
+                                            
+                                            chatMemory.add(conversantId, assistantMessagesToSave);
+                                            log.info("已异步保存助手消息到对话历史，用户标识: {} (总计: {} 条)",
+                                                    conversantId, historySize + 2);
+                                        } catch (Exception e) {
+                                            log.error("异步保存助手消息失败，用户标识: {}", conversantId, e);
+                                        }
+                                    }, error -> {
+                                        log.error("异步保存助手消息时发生错误，用户标识: {}", conversantId, error);
+                                    });
                         }
-
-                        if (!messagesToSave.isEmpty()) {
-                            chatMemory.add(conversantId, messagesToSave);
-                            log.info("保存了 {} 条消息到对话历史，用户标识: {} (总计: {} 条)",
-                                    messagesToSave.size(), conversantId,
-                                    historySize + messagesToSave.size());
+                    })
+                    // 流异常时也要尝试保存（如果有部分内容）
+                    .doOnError(error -> {
+                        String finalContent;
+                        synchronized (assistantContentBuffer) {
+                            finalContent = assistantContentBuffer.toString().trim();
                         }
-
-                        // 返回响应流
-                        return Flux.fromIterable(responses);
+                        
+                        if (!finalContent.isEmpty()) {
+                            Flux.just(finalContent)
+                                    .publishOn(Schedulers.boundedElastic())
+                                    .subscribe(content -> {
+                                        try {
+                                            content = cleanAssistantContent(content);
+                                            AssistantMessage assistantMessage = new AssistantMessage(content);
+                                            List<Message> messagesToSave = new ArrayList<>();
+                                            messagesToSave.add(assistantMessage);
+                                            chatMemory.add(conversantId, messagesToSave);
+                                            log.warn("流异常后已保存部分助手消息，用户标识: {}", conversantId);
+                                        } catch (Exception e) {
+                                            log.error("流异常后保存助手消息失败，用户标识: {}", conversantId, e);
+                                        }
+                                    });
+                        }
+                        log.error("响应流处理异常，用户标识: {}", conversantId, error);
                     });
         }
 
