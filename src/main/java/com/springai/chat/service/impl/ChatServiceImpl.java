@@ -273,38 +273,92 @@ public class ChatServiceImpl implements ChatService {
                     // 实时收集每个响应块的文本内容（不阻塞流）
                     .doOnNext(response -> {
                         try {
-                            if (response.getResult() != null && response.getResult().getOutput() != null) {
-                                var output = response.getResult().getOutput();
-                                String text = null;
-                                
-                                if (output instanceof AssistantMessage) {
-                                    text = extractTextFromAssistantMessage((AssistantMessage) output);
-                                } else {
-                                    text = extractTextContent(output);
-                                }
-                                
-                                if (text != null && !text.trim().isEmpty()) {
-                                    synchronized (assistantContentBuffer) {
-                                        String current = assistantContentBuffer.toString();
-                                        
-                                        // 流式响应处理：Spring AI Alibaba 返回的是累积的完整文本，需要提取增量部分
-                                        if (current.isEmpty()) {
-                                            // 第一个响应块：直接添加完整内容
-                                            assistantContentBuffer.append(text);
-                                        } else if (text.equals(current)) {
-                                            // 完全重复：跳过（可能是同一个chunk被处理多次）
-                                        } else if (text.startsWith(current)) {
-                                            // 标准流式增量模式：新内容是当前内容的扩展
-                                            // 只提取新增的部分（增量文本）
-                                            String newPart = text.substring(current.length());
-                                            if (!newPart.trim().isEmpty()) {
-                                                assistantContentBuffer.append(newPart);
+                            String text = null;
+                            
+                            // 方法1: 尝试从results数组中的output.text字段直接获取（最原始的数据）
+                            try {
+                                java.lang.reflect.Method getResultsMethod = response.getClass().getMethod("getResults");
+                                Object results = getResultsMethod.invoke(response);
+                                if (results instanceof java.util.List && !((java.util.List<?>) results).isEmpty()) {
+                                    Object firstResult = ((java.util.List<?>) results).get(0);
+                                    if (firstResult != null) {
+                                        Object outputObj = null;
+                                        try {
+                                            java.lang.reflect.Field outputField = firstResult.getClass().getDeclaredField("output");
+                                            outputField.setAccessible(true);
+                                            outputObj = outputField.get(firstResult);
+                                        } catch (Exception e1) {
+                                            try {
+                                                java.lang.reflect.Method getOutputMethod = firstResult.getClass().getMethod("getOutput");
+                                                outputObj = getOutputMethod.invoke(firstResult);
+                                            } catch (Exception e2) {
+                                                // 忽略
                                             }
-                                        } else if (current.startsWith(text)) {
-                                            // 新内容是当前内容的子串：可能是部分响应，跳过
-                                            // 等待更完整的响应到达
                                         }
-                                        // 其他情况：新内容与当前内容完全不同，忽略异常情况
+                                        
+                                        if (outputObj != null) {
+                                            try {
+                                                java.lang.reflect.Field textField = outputObj.getClass().getDeclaredField("text");
+                                                textField.setAccessible(true);
+                                                Object textObj = textField.get(outputObj);
+                                                if (textObj instanceof String) {
+                                                    text = (String) textObj;
+                                                }
+                                            } catch (Exception e3) {
+                                                try {
+                                                    java.lang.reflect.Method getTextMethod = outputObj.getClass().getMethod("getText");
+                                                    Object textObj = getTextMethod.invoke(outputObj);
+                                                    if (textObj instanceof String) {
+                                                        text = (String) textObj;
+                                                    }
+                                                } catch (Exception e4) {
+                                                    // 忽略
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                // 继续尝试其他方法
+                            }
+                            
+                            // 方法2: 从getResult().getOutput()获取（原有方法）
+                            if (text == null || text.trim().isEmpty()) {
+                                if (response.getResult() != null && response.getResult().getOutput() != null) {
+                                    var output = response.getResult().getOutput();
+                                    
+                                    if (output instanceof AssistantMessage) {
+                                        // 尝试通过反射直接获取textContent字段（保持原始格式，包括换行符）
+                                        text = extractTextFromAssistantMessage((AssistantMessage) output);
+                                    } else {
+                                        // 尝试getText方法
+                                        text = extractTextContent(output);
+                                    }
+                                }
+                            }
+                            
+                            if (text != null && !text.trim().isEmpty()) {
+                                synchronized (assistantContentBuffer) {
+                                    String current = assistantContentBuffer.toString();
+                                    
+                                    // 流式响应处理：判断是累积模式还是增量模式
+                                    if (current.isEmpty()) {
+                                        assistantContentBuffer.append(text);
+                                    } else if (text.equals(current)) {
+                                        // 完全重复：跳过
+                                    } else if (text.startsWith(current)) {
+                                        // 累积模式：只提取新增部分
+                                        String newPart = text.substring(current.length());
+                                        if (!newPart.trim().isEmpty()) {
+                                            assistantContentBuffer.append(newPart);
+                                        }
+                                    } else if (current.startsWith(text)) {
+                                        // 部分响应：跳过等待更完整响应
+                                    } else if (current.contains(text)) {
+                                        // 重复：跳过
+                                    } else {
+                                        // 增量模式：直接追加
+                                        assistantContentBuffer.append(text);
                                     }
                                 }
                             }
@@ -317,24 +371,21 @@ public class ChatServiceImpl implements ChatService {
                         // 切换到后台线程执行保存操作，不阻塞响应流
                         String finalContent;
                         synchronized (assistantContentBuffer) {
-                            finalContent = assistantContentBuffer.toString().trim();
+                            // 直接保存原始内容，不做任何处理（不trim，不清理，保持原始格式）
+                            finalContent = assistantContentBuffer.toString();
                         }
 
-                        if (!finalContent.isEmpty()) {
+                        if (finalContent != null && !finalContent.isEmpty()) {
                             Flux.just(finalContent)
                                     .publishOn(Schedulers.boundedElastic())
                                     .subscribe(content -> {
                                         try {
-                                            // 移除重复的 AssistantMessage 描述
-                                            content = cleanAssistantContent(content);
                                             AssistantMessage assistantMessage = new AssistantMessage(content);
-
                                             List<Message> assistantMessagesToSave = new ArrayList<>();
                                             assistantMessagesToSave.add(assistantMessage);
-
                                             chatMemory.add(conversantId, assistantMessagesToSave);
                                         } catch (Exception e) {
-                                            log.error("异步保存助手消息失败，用户标识: {}", conversantId, e);
+                                            log.error("异步保存助手消息失败，用户标识: {}, 异常: {}", conversantId, e.getMessage(), e);
                                         }
                                     }, error -> {
                                         log.error("异步保存助手消息时发生错误，用户标识: {}", conversantId, error);
@@ -345,19 +396,21 @@ public class ChatServiceImpl implements ChatService {
                     .doOnError(error -> {
                         String finalContent;
                         synchronized (assistantContentBuffer) {
-                            finalContent = assistantContentBuffer.toString().trim();
+                            // 直接保存原始内容，不做任何处理
+                            finalContent = assistantContentBuffer.toString();
                         }
 
-                        if (!finalContent.isEmpty()) {
+                        if (finalContent != null && !finalContent.isEmpty()) {
                             Flux.just(finalContent)
                                     .publishOn(Schedulers.boundedElastic())
                                     .subscribe(content -> {
                                         try {
-                                            content = cleanAssistantContent(content);
+                                            // 直接保存原始文本内容，不做任何处理
                                             AssistantMessage assistantMessage = new AssistantMessage(content);
                                             List<Message> messagesToSave = new ArrayList<>();
                                             messagesToSave.add(assistantMessage);
                                             chatMemory.add(conversantId, messagesToSave);
+                                            log.warn("流异常后已保存部分助手消息（原始格式），用户标识: {}", conversantId);
                                         } catch (Exception e) {
                                             log.error("流异常后保存助手消息失败，用户标识: {}", conversantId, e);
                                         }
@@ -389,33 +442,86 @@ public class ChatServiceImpl implements ChatService {
                 textContentField.setAccessible(true);
                 Object textContent = textContentField.get(msg);
                 if (textContent != null) {
-                    String text = textContent.toString();
+                    String text;
+                    if (textContent instanceof String) {
+                        text = (String) textContent;
+                    } else {
+                        text = textContent.toString();
+                    }
                     if (text != null && !text.trim().isEmpty()
                             && !text.startsWith("org.springframework")) {
                         return text;
                     }
                 }
             } catch (NoSuchFieldException e) {
-                // textContent 字段不存在，继续尝试其他方法
+                // 继续尝试其他方法
+            } catch (Exception e) {
+                // 忽略
             }
 
-            // 方法2: 尝试 toString() 然后解析
+            // 方法2: 尝试 toString() 然后解析（作为备用方案）
+            // 注意：这种方法可能不准确，特别是当文本包含逗号时
             String msgToString = msg.toString();
             if (msgToString != null && msgToString.contains("textContent=")) {
                 // 从 toString 中提取 textContent 值
+                // 格式通常是: AssistantMessage [textContent=实际内容, metadata=...] 或 textContent="实际内容"
                 int startIdx = msgToString.indexOf("textContent=") + 12;
-                int endIdx = msgToString.indexOf(",", startIdx);
-                if (endIdx == -1) {
-                    endIdx = msgToString.indexOf("}", startIdx);
+                
+                // 检查是否以引号开始（引号包裹的字符串）
+                boolean isQuoted = startIdx < msgToString.length() && msgToString.charAt(startIdx) == '"';
+                int endIdx = -1;
+                
+                if (isQuoted) {
+                    // 如果是引号包裹，查找匹配的结束引号（考虑转义）
+                    startIdx++; // 跳过开始的引号
+                    // 查找未转义的引号
+                    int searchStart = startIdx;
+                    while (true) {
+                        int quoteIdx = msgToString.indexOf("\"", searchStart);
+                        if (quoteIdx == -1) {
+                            // 没找到结束引号，尝试其他方法
+                            break;
+                        }
+                        // 检查是否是转义的引号
+                        if (quoteIdx == 0 || msgToString.charAt(quoteIdx - 1) != '\\') {
+                            endIdx = quoteIdx;
+                            break;
+                        }
+                        searchStart = quoteIdx + 1;
+                    }
+                    
+                    if (endIdx == -1) {
+                        // 如果没有找到结束引号，查找 metadata 或结束括号
+                        endIdx = msgToString.indexOf(", metadata=", startIdx);
+                        if (endIdx == -1) {
+                            endIdx = msgToString.indexOf("}", startIdx);
+                        }
+                        if (endIdx == -1) {
+                            endIdx = msgToString.indexOf("]", startIdx);
+                        }
+                    }
+                } else {
+                    // 如果不是引号包裹，优先查找 metadata（最可靠）
+                    endIdx = msgToString.indexOf(", metadata=", startIdx);
+                    if (endIdx == -1) {
+                        endIdx = msgToString.indexOf("}", startIdx);
+                    }
+                    if (endIdx == -1) {
+                        endIdx = msgToString.indexOf("]", startIdx);
+                    }
+                    // 如果都没找到，尝试查找最后一个已知字段之前的位置
+                    // 但这种方法不可靠，尽量避免使用
                 }
-                if (endIdx == -1) {
-                    endIdx = msgToString.indexOf("]", startIdx);
-                }
+                
                 if (endIdx > startIdx) {
                     String extracted = msgToString.substring(startIdx, endIdx).trim();
-                    // 移除可能的引号
-                    if (extracted.startsWith("\"") && extracted.endsWith("\"")) {
+                    // 移除可能的引号（如果之前没有处理）
+                    if (!isQuoted && extracted.startsWith("\"") && extracted.endsWith("\"")) {
                         extracted = extracted.substring(1, extracted.length() - 1);
+                    }
+                    // 处理转义字符
+                    if (extracted.contains("\\\"")) {
+                        extracted = extracted.replace("\\\"", "\"");
                     }
                     if (!extracted.isEmpty() && !extracted.startsWith("org.springframework")) {
                         return extracted;
@@ -430,7 +536,13 @@ public class ChatServiceImpl implements ChatService {
                     java.lang.reflect.Method method = msg.getClass().getMethod(methodName);
                     Object result = method.invoke(msg);
                     if (result != null) {
-                        String text = result.toString();
+                        // 直接使用字符串类型，避免toString()可能丢失格式
+                        String text;
+                        if (result instanceof String) {
+                            text = (String) result;
+                        } else {
+                            text = result.toString();
+                        }
                         if (text != null && !text.trim().isEmpty()
                                 && !text.startsWith("org.springframework")) {
                             return text;
@@ -520,13 +632,26 @@ public class ChatServiceImpl implements ChatService {
 
                 startIdx += searchPattern.length();
 
-                // 查找 textContent 值的结束位置（逗号、右括号或 metadata）
+                // 查找 textContent 值的结束位置
+                // 优先查找 metadata（最可靠），然后是结束括号，最后才考虑逗号
                 int endIdx = content.indexOf(", metadata=", startIdx);
                 if (endIdx == -1) {
                     endIdx = content.indexOf("}", startIdx);
                 }
                 if (endIdx == -1) {
-                    endIdx = content.indexOf(",", startIdx);
+                    endIdx = content.indexOf("]", startIdx);
+                }
+                // 最后才考虑逗号，但要验证逗号后是否是已知字段
+                if (endIdx == -1) {
+                    int commaIdx = content.indexOf(",", startIdx);
+                    if (commaIdx > startIdx && commaIdx + 1 < content.length()) {
+                        String afterComma = content.substring(commaIdx + 1).trim();
+                        // 如果逗号后是 metadata 或其他已知字段，才使用这个逗号
+                        if (afterComma.startsWith("metadata=") || afterComma.startsWith("id=") 
+                                || afterComma.startsWith("role=")) {
+                            endIdx = commaIdx;
+                        }
+                    }
                 }
                 if (endIdx == -1) {
                     // 如果都没找到，可能是最后一个，查找下一个 AssistantMessage 或字符串结束
