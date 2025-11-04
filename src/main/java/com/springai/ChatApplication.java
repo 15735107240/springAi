@@ -1,8 +1,13 @@
-package com.springai.chat;
+package com.springai;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+/**
+ * Spring AI 应用启动类
+ * 
+ * @author yanwenjie
+ */
 @SpringBootApplication
 public class ChatApplication {
 
@@ -10,3 +15,4 @@ public class ChatApplication {
         SpringApplication.run(ChatApplication.class, args);
     }
 }
+

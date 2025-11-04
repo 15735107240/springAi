@@ -8,6 +8,7 @@ import com.springai.chat.service.ChatService;
 import com.springai.chat.tools.AmapMapsService;
 import com.springai.chat.tools.MockLiveService;
 import com.springai.chat.tools.MockOrderService;
+import com.springai.chat.tools.MockWeatherService;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -32,8 +33,8 @@ import java.util.List;
 /**
  * 聊天服务实现类
  * 使用 Spring AI ChatClient 实现对话功能，支持工具调用和对话记忆
- * Spring AI 会自动扫描带有 @Tool 注解的工具方法
- * 
+ * 工具服务需要手动通过 defaultTools() 注册到 ChatClient.Builder
+ *
  * @author yanwenjie
  */
 @Slf4j
@@ -45,6 +46,7 @@ public class ChatServiceImpl implements ChatService {
     private final AmapMapsService amapMapsService;
     private final MockLiveService mockLiveService;
     private final MockOrderService mockOrderService;
+    private final MockWeatherService mockWeatherService;
 
     private static final String SYSTEM_PROMPT = """
             你的身份与语气：
@@ -164,24 +166,27 @@ public class ChatServiceImpl implements ChatService {
 
     /**
      * 构造函数
-     * 
+     *
      * @param chatClientBuilder ChatClient.Builder，由 Spring AI 自动注入
      * @param chatMemory        ChatMemory，用于保存对话记忆（可选，如果 Redis 不可用可能为 null）
      * @param dashscopeApi      DashScopeApi，用于知识库检索（可选）
      * @param amapMapsService   高德地图服务，由 Spring 自动注入
      * @param mockLiveService   租房信息服务，由 Spring 自动注入
      * @param mockOrderService  订单查询服务，由 Spring 自动注入
+     * @param mockWeatherService 天气服务（Mock），由 Spring 自动注入
      */
     public ChatServiceImpl(ChatClient.Builder chatClientBuilder,
-            @Autowired(required = false) ChatMemory chatMemory,
-            @Autowired(required = false) DashScopeApi dashscopeApi,
-            AmapMapsService amapMapsService,
-            MockLiveService mockLiveService,
-            MockOrderService mockOrderService) {
+                           @Autowired(required = false) ChatMemory chatMemory,
+                           @Autowired(required = false) DashScopeApi dashscopeApi,
+                           AmapMapsService amapMapsService,
+                           MockLiveService mockLiveService,
+                           MockOrderService mockOrderService,
+                           MockWeatherService mockWeatherService) {
         // 构建 ChatClient（用于工具调用）
+        // 注意：Spring AI 需要手动通过 defaultTools() 注册工具服务，不能仅依赖 @Tool 注解自动扫描
         ChatClient.Builder builder = chatClientBuilder.defaultSystem(SYSTEM_PROMPT)
-                .defaultTools(amapMapsService, mockLiveService, mockOrderService);
-        builder.defaultOptions(ChatOptions.builder().model("qwen3-max").build());
+                .defaultTools(amapMapsService, mockLiveService, mockOrderService, mockWeatherService);
+        //builder.defaultOptions(ChatOptions.builder().model("qwen3-max").build());
         // 如果 DashScopeApi 存在，添加知识库检索 Advisor
         if (dashscopeApi != null) {
             try {
@@ -195,13 +200,15 @@ public class ChatServiceImpl implements ChatService {
         } else {
             log.warn("DashScopeApi 未配置，知识库检索功能将不可用。如需启用，请确保 DashScope API Key 配置正确。");
         }
-        // Spring AI 会自动扫描 @Tool 注解的方法，无需手动注册
+        // 构建 ChatClient（注意：Spring AI 需要手动通过 defaultTools() 注册工具服务）
         this.chatClient = builder.build();
         this.chatMemory = chatMemory;
         this.amapMapsService = amapMapsService;
         this.mockLiveService = mockLiveService;
         this.mockOrderService = mockOrderService;
-        log.info("聊天服务初始化完成 - ChatClient: {}, ChatMemory: {}, 知识库检索: {}",
+        this.mockWeatherService = mockWeatherService;
+
+        log.info("聊天服务初始化完成 - ChatClient: {}, ChatMemory: {}, 知识库检索: {}, 工具服务: 4个",
                 chatClient.getClass().getSimpleName(),
                 chatMemory != null ? chatMemory.getClass().getSimpleName() : "无",
                 dashscopeApi != null ? "已启用" : "未启用");
@@ -209,7 +216,6 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public Flux<ChatResponse> chat(String query, String conversantId) {
-        log.info("收到聊天请求 - 消息: {}, 用户标识: {}", query, conversantId);
 
         // 1. 从 ChatMemory 获取历史对话（如果存在）
         final List<Message> history;
@@ -217,11 +223,8 @@ public class ChatServiceImpl implements ChatService {
             List<Message> historyMessages = chatMemory.get(conversantId);
             if (historyMessages != null && !historyMessages.isEmpty()) {
                 history = new ArrayList<>(historyMessages);
-                log.info("从对话历史中加载了 {} 条消息，用户标识: {}",
-                        history.size(), conversantId);
             } else {
                 history = new ArrayList<>();
-                log.debug("未找到对话历史，用户标识: {}", conversantId);
             }
         } else {
             history = new ArrayList<>();
@@ -249,8 +252,7 @@ public class ChatServiceImpl implements ChatService {
         // 使用 Prompt 对象传递完整的消息列表（包含历史），这样可以保持多轮对话上下文
         Prompt prompt = new Prompt(messages);
 
-        // 使用 ChatClient 而不是 ChatModel，这样可以获取所有配置（系统提示词、知识库检索、工具调用等）
-        // 使用注入的工具服务实例，确保 @Value 配置能够正确注入
+        // 使用 ChatClient 进行流式对话，支持工具调用和知识库检索
         Flux<ChatResponse> responseFlux = chatClient.prompt(prompt)
                 .system(s -> s.param("current_date", LocalDate.now().toString()))
                 .stream()
@@ -258,52 +260,56 @@ public class ChatServiceImpl implements ChatService {
 
         // 4. 异步保存对话到 ChatMemory（不阻塞流式响应）
         if (chatMemory != null && conversantId != null && !conversantId.trim().isEmpty()) {
-            final int historySize = history.size();
-            
             // 先立即保存用户消息（不需要等待响应）
             List<Message> userMessagesToSave = new ArrayList<>();
             userMessagesToSave.add(userMessage);
             chatMemory.add(conversantId, userMessagesToSave);
-            log.debug("已保存用户消息到对话历史，用户标识: {}", conversantId);
 
-            // 使用线程安全的 StringBuffer 收集响应内容
-            StringBuffer assistantContentBuffer = new StringBuffer();
-            
+            // 使用线程安全的 StringBuilder 收集响应内容
+            StringBuilder assistantContentBuffer = new StringBuilder();
+
             // 在后台异步收集和保存助手消息
             responseFlux = responseFlux
                     // 实时收集每个响应块的文本内容（不阻塞流）
                     .doOnNext(response -> {
-                        if (response.getResult() != null) {
-                            var result = response.getResult();
-                            String content = null;
-
-                            // 尝试获取 Output（通常是 Generation 对象）
-                            if (result.getOutput() != null) {
-                                content = extractTextContent(result.getOutput());
-                            }
-
-                            // 如果第一次尝试失败，使用反射
-                            if (content == null || content.trim().isEmpty()) {
-                                try {
-                                    java.lang.reflect.Method getOutputMethod = result.getClass().getMethod("getOutput");
-                                    Object output = getOutputMethod.invoke(result);
-                                    if (output != null) {
-                                        content = extractTextContent(output);
+                        try {
+                            if (response.getResult() != null && response.getResult().getOutput() != null) {
+                                var output = response.getResult().getOutput();
+                                String text = null;
+                                
+                                if (output instanceof AssistantMessage) {
+                                    text = extractTextFromAssistantMessage((AssistantMessage) output);
+                                } else {
+                                    text = extractTextContent(output);
+                                }
+                                
+                                if (text != null && !text.trim().isEmpty()) {
+                                    synchronized (assistantContentBuffer) {
+                                        String current = assistantContentBuffer.toString();
+                                        
+                                        // 流式响应处理：Spring AI Alibaba 返回的是累积的完整文本，需要提取增量部分
+                                        if (current.isEmpty()) {
+                                            // 第一个响应块：直接添加完整内容
+                                            assistantContentBuffer.append(text);
+                                        } else if (text.equals(current)) {
+                                            // 完全重复：跳过（可能是同一个chunk被处理多次）
+                                        } else if (text.startsWith(current)) {
+                                            // 标准流式增量模式：新内容是当前内容的扩展
+                                            // 只提取新增的部分（增量文本）
+                                            String newPart = text.substring(current.length());
+                                            if (!newPart.trim().isEmpty()) {
+                                                assistantContentBuffer.append(newPart);
+                                            }
+                                        } else if (current.startsWith(text)) {
+                                            // 新内容是当前内容的子串：可能是部分响应，跳过
+                                            // 等待更完整的响应到达
+                                        }
+                                        // 其他情况：新内容与当前内容完全不同，忽略异常情况
                                     }
-                                } catch (Exception e) {
-                                    // 忽略反射异常
                                 }
                             }
-
-                            // 追加到内容（去重，使用同步块保证线程安全）
-                            if (content != null && !content.trim().isEmpty()) {
-                                synchronized (assistantContentBuffer) {
-                                    String current = assistantContentBuffer.toString();
-                                    if (current.isEmpty() || !current.contains(content)) {
-                                        assistantContentBuffer.append(content);
-                                    }
-                                }
-                            }
+                        } catch (Exception e) {
+                            log.debug("提取响应文本时发生异常", e);
                         }
                     })
                     // 流完成时异步保存助手消息
@@ -313,7 +319,7 @@ public class ChatServiceImpl implements ChatService {
                         synchronized (assistantContentBuffer) {
                             finalContent = assistantContentBuffer.toString().trim();
                         }
-                        
+
                         if (!finalContent.isEmpty()) {
                             Flux.just(finalContent)
                                     .publishOn(Schedulers.boundedElastic())
@@ -322,13 +328,11 @@ public class ChatServiceImpl implements ChatService {
                                             // 移除重复的 AssistantMessage 描述
                                             content = cleanAssistantContent(content);
                                             AssistantMessage assistantMessage = new AssistantMessage(content);
-                                            
+
                                             List<Message> assistantMessagesToSave = new ArrayList<>();
                                             assistantMessagesToSave.add(assistantMessage);
-                                            
+
                                             chatMemory.add(conversantId, assistantMessagesToSave);
-                                            log.info("已异步保存助手消息到对话历史，用户标识: {} (总计: {} 条)",
-                                                    conversantId, historySize + 2);
                                         } catch (Exception e) {
                                             log.error("异步保存助手消息失败，用户标识: {}", conversantId, e);
                                         }
@@ -343,7 +347,7 @@ public class ChatServiceImpl implements ChatService {
                         synchronized (assistantContentBuffer) {
                             finalContent = assistantContentBuffer.toString().trim();
                         }
-                        
+
                         if (!finalContent.isEmpty()) {
                             Flux.just(finalContent)
                                     .publishOn(Schedulers.boundedElastic())
@@ -354,7 +358,6 @@ public class ChatServiceImpl implements ChatService {
                                             List<Message> messagesToSave = new ArrayList<>();
                                             messagesToSave.add(assistantMessage);
                                             chatMemory.add(conversantId, messagesToSave);
-                                            log.warn("流异常后已保存部分助手消息，用户标识: {}", conversantId);
                                         } catch (Exception e) {
                                             log.error("流异常后保存助手消息失败，用户标识: {}", conversantId, e);
                                         }
@@ -368,10 +371,89 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 从 Generation 对象中提取文本内容
-     * 支持多种方式尝试提取实际文本
-     * 
-     * @param output Generation 对象
+     * 从 AssistantMessage 中提取文本内容
+     * Spring AI 的 AssistantMessage 可能使用不同的方式存储文本
+     *
+     * @param msg AssistantMessage 对象
+     * @return 提取的文本内容，如果无法提取则返回 null
+     */
+    private String extractTextFromAssistantMessage(AssistantMessage msg) {
+        if (msg == null) {
+            return null;
+        }
+
+        try {
+            // 方法1: 尝试通过反射获取 textContent 字段
+            try {
+                java.lang.reflect.Field textContentField = msg.getClass().getDeclaredField("textContent");
+                textContentField.setAccessible(true);
+                Object textContent = textContentField.get(msg);
+                if (textContent != null) {
+                    String text = textContent.toString();
+                    if (text != null && !text.trim().isEmpty()
+                            && !text.startsWith("org.springframework")) {
+                        return text;
+                    }
+                }
+            } catch (NoSuchFieldException e) {
+                // textContent 字段不存在，继续尝试其他方法
+            }
+
+            // 方法2: 尝试 toString() 然后解析
+            String msgToString = msg.toString();
+            if (msgToString != null && msgToString.contains("textContent=")) {
+                // 从 toString 中提取 textContent 值
+                int startIdx = msgToString.indexOf("textContent=") + 12;
+                int endIdx = msgToString.indexOf(",", startIdx);
+                if (endIdx == -1) {
+                    endIdx = msgToString.indexOf("}", startIdx);
+                }
+                if (endIdx == -1) {
+                    endIdx = msgToString.indexOf("]", startIdx);
+                }
+                if (endIdx > startIdx) {
+                    String extracted = msgToString.substring(startIdx, endIdx).trim();
+                    // 移除可能的引号
+                    if (extracted.startsWith("\"") && extracted.endsWith("\"")) {
+                        extracted = extracted.substring(1, extracted.length() - 1);
+                    }
+                    if (!extracted.isEmpty() && !extracted.startsWith("org.springframework")) {
+                        return extracted;
+                    }
+                }
+            }
+
+            // 方法3: 尝试调用可能的 getter 方法
+            String[] possibleMethods = {"getText", "getTextContent", "getContent", "getMessage"};
+            for (String methodName : possibleMethods) {
+                try {
+                    java.lang.reflect.Method method = msg.getClass().getMethod(methodName);
+                    Object result = method.invoke(msg);
+                    if (result != null) {
+                        String text = result.toString();
+                        if (text != null && !text.trim().isEmpty()
+                                && !text.startsWith("org.springframework")) {
+                            return text;
+                        }
+                    }
+                } catch (NoSuchMethodException e) {
+                    // 方法不存在，继续尝试下一个
+                } catch (Exception e) {
+                    // 忽略其他异常
+                }
+            }
+
+            return null;
+        } catch (Exception e) {
+            log.debug("从 AssistantMessage 提取文本时发生异常", e);
+            return null;
+        }
+    }
+
+    /**
+     * 从其他类型的对象中提取文本内容（通用方法）
+     *
+     * @param output 输出对象
      * @return 提取的文本内容，如果无法提取则返回 null
      */
     private String extractTextContent(Object output) {
@@ -380,22 +462,7 @@ public class ChatServiceImpl implements ChatService {
         }
 
         try {
-            // 方法1: 尝试调用 getContent() 方法
-            try {
-                java.lang.reflect.Method getContentMethod = output.getClass().getMethod("getContent");
-                Object contentObj = getContentMethod.invoke(output);
-                if (contentObj != null) {
-                    String content = contentObj.toString();
-                    if (content != null && !content.trim().isEmpty()
-                            && !content.startsWith("org.springframework")) {
-                        return content;
-                    }
-                }
-            } catch (NoSuchMethodException e) {
-                // getContent() 方法不存在，继续尝试其他方法
-            }
-
-            // 方法2: 尝试调用 getText() 方法
+            // 尝试调用 getText() 方法
             try {
                 java.lang.reflect.Method getTextMethod = output.getClass().getMethod("getText");
                 Object textObj = getTextMethod.invoke(output);
@@ -407,70 +474,31 @@ public class ChatServiceImpl implements ChatService {
                     }
                 }
             } catch (NoSuchMethodException e) {
-                // getText() 方法不存在，继续尝试其他方法
+                // getText() 方法不存在
             }
 
-            // 方法3: 尝试获取 textContent 字段
-            try {
-                java.lang.reflect.Field textContentField = output.getClass().getDeclaredField("textContent");
-                textContentField.setAccessible(true);
-                Object textContent = textContentField.get(output);
-                if (textContent != null) {
-                    String text = textContent.toString();
-                    if (text != null && !text.trim().isEmpty()
-                            && !text.startsWith("org.springframework")) {
-                        return text;
-                    }
-                }
-            } catch (NoSuchFieldException e) {
-                // textContent 字段不存在
-            }
-
-            // 方法4: 尝试 toString()，但过滤掉对象描述
+            // 尝试 toString()
             String toString = output.toString();
             if (toString != null && !toString.trim().isEmpty()
                     && !toString.startsWith("org.springframework")
-                    && !toString.contains("AssistantMessage [")
-                    && !toString.contains("messageType=")) {
-                // 如果 toString 看起来像实际内容（不是对象描述），返回它
-                if (toString.length() < 500 && !toString.contains("metadata=")) {
-                    return toString;
-                }
+                    && !toString.contains("AssistantMessage")) {
+                return toString;
             }
 
-            // 方法5: 如果是 AssistantMessage 类型，尝试通过 toString 然后解析
-            if (output instanceof org.springframework.ai.chat.messages.AssistantMessage) {
-                // AssistantMessage 在流式响应中可能是分片的，尝试提取实际文本
-                String msgToString = output.toString();
-                // 尝试从 toString 中提取 textContent
-                if (msgToString.contains("textContent=")) {
-                    int startIdx = msgToString.indexOf("textContent=") + 12;
-                    int endIdx = msgToString.indexOf(",", startIdx);
-                    if (endIdx == -1)
-                        endIdx = msgToString.indexOf("}", startIdx);
-                    if (endIdx > startIdx) {
-                        String extracted = msgToString.substring(startIdx, endIdx);
-                        if (!extracted.trim().isEmpty() && !extracted.startsWith("org.springframework")) {
-                            return extracted;
-                        }
-                    }
-                }
-            }
-
-            log.warn("无法从输出对象中提取文本内容，类型: {}", output.getClass().getName());
             return null;
         } catch (Exception e) {
-            log.error("提取文本内容时发生异常", e);
+            log.debug("提取文本内容时发生异常", e);
             return null;
         }
     }
 
+
     /**
      * 清理助手消息内容，从 AssistantMessage 对象描述中提取纯文本内容
-     * 
+     *
      * 处理格式: "AssistantMessage [..., textContent=实际文本, ...]"
      * 提取所有 textContent 值并拼接
-     * 
+     *
      * @param content 原始内容
      * @return 清理后的纯文本内容
      */

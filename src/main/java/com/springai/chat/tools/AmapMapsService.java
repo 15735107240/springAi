@@ -15,7 +15,7 @@ import lombok.extern.slf4j.Slf4j;
  * 高德地图工具服务
  * 使用 @Tool 注解实现工具调用
  * 提供地理编码、逆地理编码、路径规划、周边搜索、天气查询等功能
- * 
+ *
  * @author yanwenjie
  */
 @Slf4j
