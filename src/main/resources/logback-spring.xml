@@ -36,6 +36,8 @@
     <!-- 级别配置，可按需定制 -->
     <logger name="org.springframework.web" level="INFO"/>
     <logger name="com.springai" level="INFO"/>
+    <!-- 抑制 FastJSON 关闭时的警告 -->
+    <logger name="com.alibaba.fastjson" level="ERROR"/>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>

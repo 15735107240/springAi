@@ -12,14 +12,14 @@ spring:
     allow-bean-definition-overriding: true
   ai:
     dashscope:
-      api-key: sk-b03641880ff44e9eb72006e90015ffd9
+      api-key:
       chat:
         options:
-          model: qwen3-max
+          model: qwen-max-latest
           # 禁用增量输出，避免流式模式下的工具调用问题
           # incremental-output: false
   amap:
-    api-key: 629ec7d79c04b89d6debf8adf3ffdd2a
+    api-key:
   # Redis配置
   data:
     redis:
